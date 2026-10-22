@@ -24,26 +24,103 @@ A customer is:
 }
 ```
 
-## Quick start
+## Running it
 
-Requires Go 1.24 or newer. No cgo, no external services for the dev path.
+Three modes, one binary. They differ only in where the service runs and which
+database it talks to; `make help` lists every target.
+
+| Mode  | Runs                          | Database                     | Start with       |
+|-------|-------------------------------|------------------------------|------------------|
+| dev   | on your machine (`go run`)    | local SQLite file            | `make dev`       |
+| stage | service container             | Postgres container beside it | `make stage-up`  |
+| prod  | service container image       | whatever `DATABASE_URL` names | `make prod-build` |
+
+### Dev — local machine, local SQLite
+
+Requires Go 1.24 or newer. Nothing else: the SQLite driver is pure Go, so there
+is no cgo, no toolchain, no server to install.
 
 ```bash
-make run                      # SQLite at ./data/customers.db, listening on :8080
+make dev          # :8080, ./data/customers.db, text logs at debug level
+make dev-smoke    # exercise every endpoint against it
+make dev-reset    # throw the database away and start clean
+```
+
+```bash
 curl localhost:8080/status
 curl -X POST localhost:8080/customers \
   -H 'Content-Type: application/json' \
   -d '{"name":"Acme Ltd","status":"active"}'
 ```
 
-Against Postgres:
+`make dev-build` produces `./bin/customersvc` with version stamps if you want
+the binary rather than `go run`, and `make dev-run` builds and runs it.
+
+### Stage — service container plus Postgres container
+
+`deploy/compose.stage.yaml` builds the service image from the repository and
+starts it alongside Postgres on a private network. The service waits for the
+database to pass its health check before starting, then creates its schema, so
+a cold `make stage-up` lands on a working stack with no manual steps.
 
 ```bash
-make postgres-up              # disposable Postgres in Docker on :5432
-make run-postgres             # STORE_DRIVER=postgres, schema created at startup
+make stage-up      # build and start, waits until both containers are healthy
+make stage-smoke   # exercise every endpoint against the stack
+make stage-logs    # follow the service log
+make stage-psql    # psql into the stage database
+make stage-down    # stop, keeping the data volume
+make stage-clean   # stop and delete the data volume
 ```
 
-or `docker compose up --build`, which runs the service and Postgres together.
+The service is published on `localhost:8080` and Postgres on `localhost:5432`,
+both overridable (`make stage-up HTTP_PORT=9000 POSTGRES_PORT=55432`). Service
+settings live in `deploy/stage.env`; the database URL is assembled in the
+compose file from the `POSTGRES_*` values so the credentials have one source.
+Data survives `stage-down` in a named volume.
+
+Because Postgres is published, this is also how to run the full test suite
+against both engines:
+
+```bash
+make stage-up
+make test-postgres
+```
+
+### Prod — the service as an image
+
+Production builds the service alone. The database is external — a managed
+Postgres, an operator-run cluster — and reached through `DATABASE_URL`.
+
+```bash
+make prod-build                        # customersvc:<version> and :latest
+make prod-push REGISTRY=ghcr.io/thinkovation
+```
+
+The image is a distroless static build running as a non-root user, with no
+shell and a read-only root filesystem in the compose file. Its `HEALTHCHECK`
+is the binary probing its own `/zhealth` (`customersvc healthcheck`), since
+there is no `curl` or `wget` inside to call.
+
+To run that image locally:
+
+```bash
+cp deploy/prod.env.example deploy/prod.env   # then fill in DATABASE_URL
+make prod-up
+make prod-down
+```
+
+Or hand it to whatever runs your containers:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e STORE_DRIVER=postgres \
+  -e DATABASE_URL='postgres://user:pass@db.internal:5432/customers?sslmode=require' \
+  customersvc:latest
+```
+
+Version, commit and build date are stamped in at link time and reported by
+`/status` and `customersvc version`, so a running container can always be
+traced back to a commit.
 
 ## Endpoints
 
@@ -214,8 +291,10 @@ repeat it.
 
 ## Configuration
 
-All configuration is environment variables; see `.env.example` for a copy-paste
-starting point. Defaults are production-safe apart from the storage driver.
+All configuration is environment variables. Each mode has its own source: dev
+reads an optional `.env` (copy `.env.example`), stage reads `deploy/stage.env`,
+prod reads `deploy/prod.env`. Defaults are production-safe apart from the
+storage driver.
 
 | Variable                | Default                   | Purpose                                      |
 |-------------------------|---------------------------|----------------------------------------------|
@@ -291,38 +370,23 @@ internal/store         persistence interface and sentinel errors
 internal/store/sqlstore  one database/sql implementation, two dialects
 internal/httpapi       routing, middleware, handlers, JSON shapes
 internal/buildinfo     version stamps injected at link time
+deploy/                compose files and per-mode environment
+scripts/smoke.sh       end-to-end check of a running instance, any mode
 ```
 
-## Development
+## Tests and quality
 
 ```bash
 make check          # gofmt, go vet, go test -race
 make test           # tests (Postgres suites skip unless TEST_POSTGRES_DSN is set)
-make test-postgres  # tests against SQLite and Postgres
+make test-postgres  # tests against SQLite and Postgres (needs make stage-up)
 make cover          # coverage summary
-make build          # ./bin/customersvc with version stamps
 ```
 
-The store tests run the same suite against every available engine. To include
-Postgres:
-
-```bash
-make postgres-up
-make test-postgres
-make postgres-down
-```
-
-## Container
-
-```bash
-make docker-build
-docker run --rm -p 8080:8080 \
-  -e STORE_DRIVER=postgres \
-  -e DATABASE_URL='postgres://customers:customers@host.docker.internal:5432/customers?sslmode=disable' \
-  customersvc:dev
-```
-
-The image is a distroless static build running as a non-root user. For the
-SQLite path, mount a volume at `/var/lib/customersvc`.
+The store tests run one conformance suite against every available engine, so
+SQLite and Postgres are held to the same behaviour rather than tested
+separately. `scripts/smoke.sh <base-url>` checks a running instance in any
+mode and exits non-zero on the first bad status code, which makes it usable as
+a post-deploy gate.
 
 [draft-ietf-httpbis-safe-method-w-body]: https://datatracker.ietf.org/doc/draft-ietf-httpbis-safe-method-w-body/

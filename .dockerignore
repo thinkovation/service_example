@@ -1,0 +1,19 @@
+# Keep the build context to the source the image actually needs.
+.git
+.github
+bin/
+data/
+deploy/
+coverage.out
+*.out
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+README.md
+Makefile
+Dockerfile
+.dockerignore
+docker-compose*.yml

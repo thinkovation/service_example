@@ -1,44 +1,147 @@
-BINARY      := customersvc
-PKG         := ./...
-VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-COMMIT      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-BUILD_DATE  ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-MODULE      := github.com/thinkovation/service_example
-LDFLAGS     := -s -w \
+# Three ways to run this service:
+#
+#   dev    - on your machine, against a local SQLite file      (make dev)
+#   stage  - service container + Postgres container, wired up  (make stage-up)
+#   prod   - the service built into a container image          (make prod-build)
+#
+# `make help` lists every target.
+
+BINARY  := customersvc
+MODULE  := github.com/thinkovation/service_example
+PKG     := ./...
+
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS    := -s -w \
 	-X $(MODULE)/internal/buildinfo.Version=$(VERSION) \
 	-X $(MODULE)/internal/buildinfo.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/buildinfo.BuildDate=$(BUILD_DATE)
 
-# A throwaway Postgres for `make postgres-up` and the Postgres test suite.
-PG_CONTAINER ?= customersvc-postgres
-PG_DSN       ?= postgres://customers:customers@localhost:5432/customers?sslmode=disable
+IMAGE     ?= customersvc
+HTTP_PORT ?= 8080
+
+# dev: SQLite on the local filesystem, human-readable logs. These are defaults:
+# a .env file, if you keep one, is sourced afterwards and wins.
+DEV_ENV := SERVICE_ENV=development; \
+	STORE_DRIVER=sqlite; \
+	SQLITE_DSN=file:./data/customers.db; \
+	HTTP_ADDR=:$(HTTP_PORT); \
+	LOG_FORMAT=text; \
+	LOG_LEVEL=debug
+# set -a exports every assignment, including the ones .env makes.
+DEV_SHELL = set -a; $(DEV_ENV); [ -f .env ] && . ./.env; set +a;
+
+COMPOSE       := docker compose
+STAGE_COMPOSE := $(COMPOSE) -f deploy/compose.stage.yaml
+PROD_COMPOSE  := $(COMPOSE) -f deploy/compose.prod.yaml
+# Build stamps and the image tag reach compose through the environment.
+COMPOSE_ENV   := IMAGE=$(IMAGE) VERSION=$(VERSION) COMMIT=$(COMMIT) BUILD_DATE=$(BUILD_DATE) HTTP_PORT=$(HTTP_PORT)
+
+# The Postgres the test suite uses; `make stage-up` serves it by default.
+PG_DSN ?= postgres://customers:customers@localhost:5432/customers?sslmode=disable
+
+.DEFAULT_GOAL := help
 
 .PHONY: help
-help: ## Show this help
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+help: ## List the available targets
+	@awk 'BEGIN {FS = ":.*?## "} \
+		/^## /       {printf "\n\033[1m%s\033[0m\n", substr($$0, 4)} \
+		/^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@echo
 
-.PHONY: build
-build: ## Build the service binary into ./bin
+## Dev - local machine, local SQLite file
+.PHONY: dev
+dev: ## Run the service locally against ./data/customers.db
+	@$(DEV_SHELL) exec go run ./cmd/customersvc
+
+.PHONY: dev-build
+dev-build: ## Build the binary into ./bin for local use
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/customersvc
 
-.PHONY: run
-run: ## Run the service against SQLite (development default)
-	go run ./cmd/customersvc
+.PHONY: dev-run
+dev-run: dev-build ## Build, then run the binary against ./data/customers.db
+	@$(DEV_SHELL) exec ./bin/$(BINARY)
 
-.PHONY: run-postgres
-run-postgres: ## Run the service against Postgres (see PG_DSN)
-	STORE_DRIVER=postgres DATABASE_URL='$(PG_DSN)' go run ./cmd/customersvc
+.PHONY: dev-reset
+dev-reset: ## Delete the local SQLite database
+	rm -f data/customers.db data/customers.db-wal data/customers.db-shm
 
+.PHONY: dev-smoke
+dev-smoke: ## Check a locally running dev service answers on every endpoint
+	@scripts/smoke.sh http://localhost:$(HTTP_PORT)
+
+## Stage - service container plus Postgres container
+.PHONY: stage-up
+stage-up: ## Build and start the stage stack, then wait for it to be healthy
+	$(COMPOSE_ENV) $(STAGE_COMPOSE) up --build --detach --wait
+	@echo "stage is up on http://localhost:$(HTTP_PORT)"
+
+.PHONY: stage-down
+stage-down: ## Stop the stage stack, keeping the database volume
+	$(STAGE_COMPOSE) down
+
+.PHONY: stage-clean
+stage-clean: ## Stop the stage stack and delete the database volume
+	$(STAGE_COMPOSE) down --volumes
+
+.PHONY: stage-logs
+stage-logs: ## Follow the stage service log
+	$(STAGE_COMPOSE) logs --follow customersvc
+
+.PHONY: stage-ps
+stage-ps: ## Show the stage containers and their health
+	$(STAGE_COMPOSE) ps
+
+.PHONY: stage-psql
+stage-psql: ## Open psql against the stage database
+	$(STAGE_COMPOSE) exec postgres psql -U customers -d customers
+
+.PHONY: stage-smoke
+stage-smoke: ## Check the stage stack answers on every endpoint
+	@scripts/smoke.sh http://localhost:$(HTTP_PORT)
+
+.PHONY: stage-config
+stage-config: ## Render the stage compose file with variables resolved
+	$(COMPOSE_ENV) $(STAGE_COMPOSE) config
+
+## Prod - the service as a container image
+.PHONY: prod-build
+prod-build: ## Build the production image, tagged with the version and latest
+	docker build \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--tag $(IMAGE):$(VERSION) \
+		--tag $(IMAGE):latest \
+		.
+
+.PHONY: prod-up
+prod-up: ## Run the production image against deploy/prod.env
+	@test -f deploy/prod.env || { echo "deploy/prod.env is missing; copy deploy/prod.env.example"; exit 1; }
+	$(COMPOSE_ENV) $(PROD_COMPOSE) up --detach --wait
+
+.PHONY: prod-down
+prod-down: ## Stop the production container
+	$(PROD_COMPOSE) down
+
+.PHONY: prod-push
+prod-push: ## Push the production image (set REGISTRY, e.g. ghcr.io/thinkovation)
+	@test -n "$(REGISTRY)" || { echo "set REGISTRY, e.g. make prod-push REGISTRY=ghcr.io/thinkovation"; exit 1; }
+	docker tag $(IMAGE):$(VERSION) $(REGISTRY)/$(IMAGE):$(VERSION)
+	docker push $(REGISTRY)/$(IMAGE):$(VERSION)
+
+## Quality
 .PHONY: test
-test: ## Run the test suite (Postgres tests are skipped unless TEST_POSTGRES_DSN is set)
+test: ## Run the tests (Postgres suites skip unless TEST_POSTGRES_DSN is set)
 	go test -race -count=1 $(PKG)
 
 .PHONY: test-postgres
-test-postgres: ## Run the test suite against SQLite and Postgres
+test-postgres: ## Run the tests against SQLite and Postgres (needs make stage-up)
 	TEST_POSTGRES_DSN='$(PG_DSN)' go test -race -count=1 $(PKG)
 
 .PHONY: cover
-cover: ## Run the tests and open a coverage summary
+cover: ## Report test coverage
 	go test -count=1 -coverprofile=coverage.out $(PKG)
 	go tool cover -func=coverage.out | tail -1
 
@@ -57,20 +160,6 @@ check: fmt vet test ## Format, vet and test
 tidy: ## Tidy the module files
 	go mod tidy
 
-.PHONY: postgres-up
-postgres-up: ## Start a disposable Postgres in Docker
-	docker run -d --rm --name $(PG_CONTAINER) \
-		-e POSTGRES_USER=customers -e POSTGRES_PASSWORD=customers -e POSTGRES_DB=customers \
-		-p 5432:5432 postgres:16-alpine
-
-.PHONY: postgres-down
-postgres-down: ## Stop the disposable Postgres
-	docker stop $(PG_CONTAINER)
-
-.PHONY: docker-build
-docker-build: ## Build the container image
-	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(BINARY):$(VERSION) .
-
 .PHONY: clean
-clean: ## Remove build output and the development database
+clean: ## Remove build output, coverage and the local database
 	rm -rf bin coverage.out data

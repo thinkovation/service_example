@@ -9,6 +9,7 @@ ENV MODULE=github.com/thinkovation/service_example
 
 WORKDIR /src
 
+# Dependencies first: this layer is cached until go.mod or go.sum changes.
 COPY go.mod go.sum ./
 RUN go mod download
 
@@ -20,15 +21,22 @@ RUN CGO_ENABLED=0 go build -trimpath \
 		-X ${MODULE}/internal/buildinfo.BuildDate=${BUILD_DATE}" \
 	-o /out/customersvc ./cmd/customersvc
 
-# Runtime stage.
+# Runtime stage: distroless, non-root, no shell.
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/customersvc /usr/local/bin/customersvc
 
-# The SQLite default writes here; mount a volume when running without Postgres.
+# Where the SQLite file lands if the image is run on the SQLite driver. Mount a
+# volume here for that; with STORE_DRIVER=postgres nothing is written at all.
 WORKDIR /var/lib/customersvc
-ENV SQLITE_DSN=file:/var/lib/customersvc/customers.db
+ENV SQLITE_DSN=file:/var/lib/customersvc/customers.db \
+	HTTP_ADDR=:8080
 
 EXPOSE 8080
+
+# There is no shell in the image, so the binary probes itself.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+	CMD ["/usr/local/bin/customersvc", "healthcheck"]
+
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/customersvc"]

@@ -19,6 +19,24 @@ import (
 )
 
 func main() {
+	// Subcommands keep the image free of a shell: the container healthcheck is
+	// the binary itself. With no arguments the process runs the service.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "healthcheck":
+			os.Exit(healthcheck(os.Args[2:]))
+		case "version", "--version", "-version":
+			printVersion()
+			return
+		case "help", "--help", "-h":
+			fmt.Print(usage)
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], usage)
+			os.Exit(2)
+		}
+	}
+
 	if err := run(); err != nil {
 		// The logger may not exist yet, so report to stderr as well.
 		fmt.Fprintln(os.Stderr, "fatal:", err)
@@ -36,9 +54,8 @@ func run() error {
 	slog.SetDefault(logger)
 
 	build := buildinfo.Get()
+	// service and env are already attached to every line by newLogger.
 	logger.Info("starting service",
-		slog.String("service", cfg.ServiceName),
-		slog.String("env", cfg.Env),
 		slog.String("version", build.Version),
 		slog.String("commit", build.Commit),
 		slog.String("store_driver", cfg.StoreDriver),

@@ -1,0 +1,63 @@
+# Stage: the service and its database, both in containers, wired together.
+#
+#   make stage-up        build and start the stack
+#   make stage-logs      follow the service log
+#   make stage-down      stop it (the database volume survives)
+#   make stage-clean     stop it and delete the database volume
+#
+# Paths are relative to this file, so the build context is the repository root.
+name: customersvc-stage
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-customers}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-customers}
+      POSTGRES_DB: ${POSTGRES_DB:-customers}
+    ports:
+      # Exposed so you can reach the stage database with psql; drop this to
+      # keep it on the compose network only.
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-customers} -d ${POSTGRES_DB:-customers}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  customersvc:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-stage}
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-}
+    image: ${IMAGE:-customersvc}:${VERSION:-stage}
+    restart: unless-stopped
+    env_file:
+      - stage.env
+    environment:
+      # Built here rather than in stage.env so the credentials have one source.
+      DATABASE_URL: postgres://${POSTGRES_USER:-customers}:${POSTGRES_PASSWORD:-customers}@postgres:5432/${POSTGRES_DB:-customers}?sslmode=disable
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        # The service creates its schema at startup, so it waits for a database
+        # that is actually accepting connections.
+        condition: service_healthy
+    # The image's own HEALTHCHECK probes /zhealth; nothing is written to disk
+    # on the Postgres driver, so the filesystem can stay read-only.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  postgres-data:
