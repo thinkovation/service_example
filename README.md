@@ -27,7 +27,12 @@ A customer is:
 ## Running it
 
 Three modes, one binary. They differ only in where the service runs and which
-database it talks to; `make help` lists every target.
+database it talks to.
+
+Commands are shown as `make` targets. On Windows, where make usually is not
+installed, `scripts\run.ps1` takes the same command names
+(`.\scripts\run.ps1 stage-up`), and VS Code users can run the same things from
+**Tasks: Run Task**. See [Windows and VS Code](#windows-and-vs-code).
 
 | Mode  | Runs                          | Database                     | Start with       |
 |-------|-------------------------------|------------------------------|------------------|
@@ -289,6 +294,49 @@ Every response carries `X-Request-Id`. An inbound value is reused so a gateway's
 correlation id survives into the logs; otherwise one is generated. Error bodies
 repeat it.
 
+## Windows and VS Code
+
+Nothing here needs make. The service is plain Go and the containers are plain
+`docker compose`, so there are three equivalent ways to drive it:
+
+| Task                 | make                 | PowerShell                          | VS Code task             |
+|----------------------|----------------------|-------------------------------------|--------------------------|
+| Run against SQLite   | `make dev`           | `.\scripts\run.ps1 dev`             | dev: run service (SQLite)|
+| Smoke test it        | `make dev-smoke`     | `.\scripts\run.ps1 dev-smoke`       | dev: smoke test          |
+| Tests                | `make test`          | `.\scripts\run.ps1 test`            | test                     |
+| Start the stage stack| `make stage-up`      | `.\scripts\run.ps1 stage-up`        | stage: up                |
+| Stop it              | `make stage-down`    | `.\scripts\run.ps1 stage-down`      | stage: down              |
+| Build the prod image | `make prod-build`    | `.\scripts\run.ps1 prod-build`      | prod: build image        |
+
+`.\scripts\run.ps1 help` lists every command; it takes `-Port`, `-Image` and
+`-Registry` where those apply. In VS Code the tasks are under **Ctrl+Shift+P →
+Tasks: Run Task**, and **F5** runs the service under the debugger (the
+*Debug service (SQLite)* configuration; there is a Postgres one too, for use
+with the stage stack).
+
+Or skip all of it and use the Go toolchain directly, which is all any of the
+above does:
+
+```powershell
+$env:STORE_DRIVER="sqlite"; $env:SQLITE_DSN="file:./data/customers.db"
+go run ./cmd/customersvc
+go run ./cmd/smoke http://localhost:8080
+go test ./...
+docker compose -f deploy/compose.stage.yaml up --build -d --wait
+```
+
+Windows specifics worth knowing:
+
+- Requires Go, and Docker Desktop for the stage and prod modes. No C compiler:
+  the SQLite driver is pure Go, so `go build` works on a bare Windows box.
+- `.gitattributes` checks everything out with LF except `.ps1`, so files that
+  end up inside the Linux containers are not broken by CRLF.
+- WSL works too, with the make targets, and so does a mix: editing in Windows
+  VS Code with the terminal in WSL Ubuntu. The one thing not to do is share a
+  `./data/customers.db` across both at once — SQLite file locking over the
+  WSL/Windows filesystem boundary is unreliable. `make dev-reset` or
+  `.\scripts\run.ps1 dev-reset` clears it.
+
 ## Configuration
 
 All configuration is environment variables. Each mode has its own source: dev
@@ -325,14 +373,25 @@ Misconfiguration fails at startup with every problem listed at once.
 
 ## Storage
 
-Both engines are served by one `database/sql` implementation
-(`internal/store/sqlstore`); only bind-parameter syntax, timestamp encoding,
-DDL and row locking differ, and those sit behind a small `dialect` interface.
-Swapping engines is a config change, and the test suite runs the same
-conformance tests against both.
+There are two drivers, one per database, each a package of its own with its own
+SQL, its own schema and its own tests:
+
+- `internal/store/sqlite` — the development driver. `modernc.org/sqlite`, a
+  pure-Go implementation, so builds stay free of cgo and the image needs no
+  shared libraries. Timestamps are stored as fixed-width UTC text (SQLite
+  compares TEXT lexicographically, so a format that trimmed trailing zeros
+  would break range filters and ordering) and the pool is pinned to one
+  connection, since SQLite serialises writers. It is the single-node story.
+- `internal/store/postgres` — the stage and production driver. `pgx` through
+  `database/sql`, native `uuid` and `timestamptz` columns, a real pool, and
+  `SELECT … FOR UPDATE` on the read-modify-write paths so concurrent writers
+  cannot interleave.
+
+They share the `store.Store` interface and nothing else. `cmd/customersvc` is
+the only place that chooses between them, on `STORE_DRIVER`.
 
 ```sql
--- Postgres
+-- internal/store/postgres
 CREATE TABLE customers (
     id        UUID NOT NULL PRIMARY KEY,
     name      TEXT NOT NULL,
@@ -342,36 +401,41 @@ CREATE TABLE customers (
 );
 ```
 
-The schema is applied at startup when `DB_AUTO_MIGRATE=true`, using
-`CREATE TABLE IF NOT EXISTS`, so it is safe to run on every boot and with
+```sql
+-- internal/store/sqlite
+CREATE TABLE customers (
+    id        TEXT NOT NULL PRIMARY KEY,
+    name      TEXT NOT NULL,
+    status    TEXT NOT NULL,
+    create_ts TEXT NOT NULL,
+    update_ts TEXT NOT NULL
+);
+```
+
+Each driver applies its own schema at startup when `DB_AUTO_MIGRATE=true`,
+using `CREATE TABLE IF NOT EXISTS`, so it is safe on every boot and with
 several instances starting at once. Set it to `false` and run the DDL yourself
 if your environment manages migrations centrally.
 
-Notes worth knowing:
-
-- **SQLite** uses the pure-Go `modernc.org/sqlite` driver, so builds stay
-  cgo-free and the container image is `FROM scratch`-thin. The pool is pinned
-  to a single connection (SQLite serialises writers) and the DSN gets WAL,
-  `busy_timeout` and foreign keys by default. It is the development and
-  single-node story, not a horizontal-scaling one.
-- **Postgres** uses `pgx` through `database/sql`. Timestamps keep microsecond
-  precision there against SQLite's nanoseconds, which is why the service always
-  returns UTC RFC 3339 and never relies on sub-microsecond ordering.
-- Read-modify-write paths (`PUT`, `PATCH`) run in a transaction with
-  `SELECT … FOR UPDATE` on Postgres, so concurrent writers cannot interleave.
+One difference is visible through the API: Postgres keeps timestamps to
+microsecond precision where SQLite keeps nanoseconds. The service always
+returns UTC RFC 3339 and never relies on sub-microsecond ordering.
 
 ## Project layout
 
 ```
-cmd/customersvc        process entry point: config, logging, lifecycle
-internal/config        environment configuration and validation
-internal/customer      domain model, validation, query specification
-internal/store         persistence interface and sentinel errors
-internal/store/sqlstore  one database/sql implementation, two dialects
-internal/httpapi       routing, middleware, handlers, JSON shapes
-internal/buildinfo     version stamps injected at link time
-deploy/                compose files and per-mode environment
-scripts/smoke.sh       end-to-end check of a running instance, any mode
+cmd/customersvc          process entry point: config, logging, lifecycle
+cmd/smoke                end-to-end check of a running instance, any mode
+internal/config          environment configuration and validation
+internal/customer        domain model, validation, query specification
+internal/store           persistence interface and sentinel errors
+internal/store/sqlite    the SQLite driver
+internal/store/postgres  the Postgres driver
+internal/httpapi         routing, middleware, handlers, JSON shapes
+internal/buildinfo       version stamps injected at link time
+deploy/                  compose files and per-mode environment
+scripts/run.ps1          the make targets, for Windows
+.vscode/                 tasks and debug configurations
 ```
 
 ## Tests and quality
@@ -383,10 +447,13 @@ make test-postgres  # tests against SQLite and Postgres (needs make stage-up)
 make cover          # coverage summary
 ```
 
-The store tests run one conformance suite against every available engine, so
-SQLite and Postgres are held to the same behaviour rather than tested
-separately. `scripts/smoke.sh <base-url>` checks a running instance in any
-mode and exits non-zero on the first bad status code, which makes it usable as
-a post-deploy gate.
+Each driver has its own test suite covering the same behaviour, so the two are
+held to the same contract without sharing an implementation. The Postgres suite
+skips unless `TEST_POSTGRES_DSN` is set, which keeps `go test ./...` runnable
+with no database at all.
+
+`go run ./cmd/smoke <base-url>` checks a running instance in any mode and exits
+non-zero if anything fails, which makes it usable as a post-deploy gate. It is
+Go rather than a shell script so it runs the same everywhere.
 
 [draft-ietf-httpbis-safe-method-w-body]: https://datatracker.ietf.org/doc/draft-ietf-httpbis-safe-method-w-body/

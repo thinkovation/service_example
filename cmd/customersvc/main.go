@@ -15,7 +15,9 @@ import (
 	"github.com/thinkovation/service_example/internal/buildinfo"
 	"github.com/thinkovation/service_example/internal/config"
 	"github.com/thinkovation/service_example/internal/httpapi"
-	"github.com/thinkovation/service_example/internal/store/sqlstore"
+	"github.com/thinkovation/service_example/internal/store"
+	"github.com/thinkovation/service_example/internal/store/postgres"
+	"github.com/thinkovation/service_example/internal/store/sqlite"
 )
 
 func main() {
@@ -67,16 +69,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := sqlstore.Open(ctx, sqlstore.Config{
-		Dialect:         cfg.StoreDriver,
-		DSN:             cfg.DSN(),
-		MaxOpenConns:    cfg.MaxOpenConns,
-		MaxIdleConns:    cfg.MaxIdleConns,
-		ConnMaxLifetime: cfg.ConnMaxLifetime,
-		ConnMaxIdleTime: cfg.ConnMaxIdleTime,
-		AutoMigrate:     cfg.AutoMigrate,
-		PingTimeout:     cfg.DBPingTimeout,
-	})
+	db, err := openStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -145,6 +138,35 @@ func run() error {
 
 	logger.Info("shutdown complete")
 	return nil
+}
+
+// openStore picks the driver named by STORE_DRIVER. Each driver is its own
+// package with its own SQL; this is the only place that chooses between them.
+func openStore(ctx context.Context, cfg config.Config) (store.Store, error) {
+	switch cfg.StoreDriver {
+	case config.DriverSQLite:
+		return sqlite.Open(ctx, sqlite.Config{
+			DSN:         cfg.SQLiteDSN,
+			AutoMigrate: cfg.AutoMigrate,
+			PingTimeout: cfg.DBPingTimeout,
+		})
+
+	case config.DriverPostgres:
+		return postgres.Open(ctx, postgres.Config{
+			DSN:             cfg.PostgresDSN,
+			AutoMigrate:     cfg.AutoMigrate,
+			PingTimeout:     cfg.DBPingTimeout,
+			MaxOpenConns:    cfg.MaxOpenConns,
+			MaxIdleConns:    cfg.MaxIdleConns,
+			ConnMaxLifetime: cfg.ConnMaxLifetime,
+			ConnMaxIdleTime: cfg.ConnMaxIdleTime,
+		})
+
+	default:
+		// config.Load has already rejected anything else; this keeps the
+		// switch honest if a driver is added there and forgotten here.
+		return nil, fmt.Errorf("unsupported STORE_DRIVER %q", cfg.StoreDriver)
+	}
 }
 
 func newLogger(cfg config.Config) *slog.Logger {

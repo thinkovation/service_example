@@ -5,6 +5,9 @@
 #   prod   - the service built into a container image          (make prod-build)
 #
 # `make help` lists every target.
+#
+# On Windows without make, scripts/run.ps1 has the same commands
+# (`.\scripts\run.ps1 help`), and .vscode/tasks.json runs them from VS Code.
 
 BINARY  := customersvc
 MODULE  := github.com/thinkovation/service_example
@@ -69,7 +72,7 @@ dev-reset: ## Delete the local SQLite database
 
 .PHONY: dev-smoke
 dev-smoke: ## Check a locally running dev service answers on every endpoint
-	@scripts/smoke.sh http://localhost:$(HTTP_PORT)
+	go run ./cmd/smoke http://localhost:$(HTTP_PORT)
 
 ## Stage - service container plus Postgres container
 .PHONY: stage-up
@@ -99,7 +102,7 @@ stage-psql: ## Open psql against the stage database
 
 .PHONY: stage-smoke
 stage-smoke: ## Check the stage stack answers on every endpoint
-	@scripts/smoke.sh http://localhost:$(HTTP_PORT)
+	go run ./cmd/smoke http://localhost:$(HTTP_PORT)
 
 .PHONY: stage-config
 stage-config: ## Render the stage compose file with variables resolved

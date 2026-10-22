@@ -1,0 +1,93 @@
+{
+	// Cross-platform: every task calls go or docker directly, so these work the
+	// same on Windows, WSL and Linux, with or without make.
+	// Run them with Ctrl+Shift+P -> "Tasks: Run Task".
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "dev: run service (SQLite)",
+			"detail": "Run the service on this machine against ./data/customers.db",
+			"type": "shell",
+			"command": "go",
+			"args": ["run", "./cmd/customersvc"],
+			"options": {
+				"env": {
+					"SERVICE_ENV": "development",
+					"STORE_DRIVER": "sqlite",
+					"SQLITE_DSN": "file:./data/customers.db",
+					"HTTP_ADDR": ":8080",
+					"LOG_FORMAT": "text",
+					"LOG_LEVEL": "debug"
+				}
+			},
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "dev: smoke test",
+			"detail": "Check a running service answers on every endpoint",
+			"type": "shell",
+			"command": "go",
+			"args": ["run", "./cmd/smoke", "http://localhost:8080"],
+			"problemMatcher": []
+		},
+		{
+			"label": "test",
+			"detail": "Run the test suite (Postgres tests skip without a database)",
+			"type": "shell",
+			"command": "go",
+			"args": ["test", "-race", "-count=1", "./..."],
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"problemMatcher": ["$go"]
+		},
+		{
+			"label": "test: including Postgres",
+			"detail": "Run the tests against SQLite and the stage Postgres (run 'stage: up' first)",
+			"type": "shell",
+			"command": "go",
+			"args": ["test", "-race", "-count=1", "./..."],
+			"options": {
+				"env": {
+					"TEST_POSTGRES_DSN": "postgres://customers:customers@localhost:5432/customers?sslmode=disable"
+				}
+			},
+			"problemMatcher": ["$go"]
+		},
+		{
+			"label": "stage: up",
+			"detail": "Build and start the service and Postgres containers",
+			"type": "shell",
+			"command": "docker",
+			"args": ["compose", "-f", "deploy/compose.stage.yaml", "up", "--build", "--detach", "--wait"],
+			"problemMatcher": []
+		},
+		{
+			"label": "stage: down",
+			"detail": "Stop the stage stack, keeping the database volume",
+			"type": "shell",
+			"command": "docker",
+			"args": ["compose", "-f", "deploy/compose.stage.yaml", "down"],
+			"problemMatcher": []
+		},
+		{
+			"label": "stage: logs",
+			"detail": "Follow the stage service log",
+			"type": "shell",
+			"command": "docker",
+			"args": ["compose", "-f", "deploy/compose.stage.yaml", "logs", "--follow", "customersvc"],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "prod: build image",
+			"detail": "Build the production container image",
+			"type": "shell",
+			"command": "docker",
+			"args": ["build", "--tag", "customersvc:latest", "."],
+			"problemMatcher": []
+		}
+	]
+}

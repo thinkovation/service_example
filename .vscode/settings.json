@@ -1,0 +1,11 @@
+{
+	"[go]": {
+		"editor.formatOnSave": true,
+		"editor.defaultFormatter": "golang.go"
+	},
+	"go.testFlags": ["-count=1"],
+	"go.lintOnSave": "package",
+	// Keep line endings LF on Windows too: these files are read inside Linux
+	// containers, where CRLF breaks them.
+	"files.eol": "\n"
+}

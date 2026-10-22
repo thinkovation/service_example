@@ -19,16 +19,14 @@ import (
 	"github.com/thinkovation/service_example/internal/customer"
 	"github.com/thinkovation/service_example/internal/httpapi"
 	"github.com/thinkovation/service_example/internal/store"
-	"github.com/thinkovation/service_example/internal/store/sqlstore"
+	"github.com/thinkovation/service_example/internal/store/sqlite"
 )
 
 func newServer(t *testing.T) *httpapi.Server {
 	t.Helper()
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := sqlstore.Open(context.Background(), sqlstore.Config{
-		Dialect: sqlstore.DialectSQLite, DSN: dsn, AutoMigrate: true,
-	})
+	db, err := sqlite.Open(context.Background(), sqlite.Config{DSN: dsn, AutoMigrate: true})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -134,8 +132,8 @@ func TestStatus(t *testing.T) {
 	if body.Service != "customer-service-test" || body.Env != "test" || body.Status != "ok" {
 		t.Errorf("status body = %+v, want the configured service identity", body)
 	}
-	if body.Store.Driver != sqlstore.DialectSQLite {
-		t.Errorf("store driver = %q, want %q", body.Store.Driver, sqlstore.DialectSQLite)
+	if body.Store.Driver != sqlite.Driver {
+		t.Errorf("store driver = %q, want %q", body.Store.Driver, sqlite.Driver)
 	}
 	if body.Build.GoVersion == "" {
 		t.Error("build.go_version is empty")
@@ -272,8 +270,8 @@ func TestCreateCustomerRejectsNonJSONContentType(t *testing.T) {
 }
 
 func TestCreateCustomerRejectsOversizedBody(t *testing.T) {
-	db, err := sqlstore.Open(context.Background(), sqlstore.Config{
-		Dialect: sqlstore.DialectSQLite, DSN: "file:oversized?mode=memory&cache=shared", AutoMigrate: true,
+	db, err := sqlite.Open(context.Background(), sqlite.Config{
+		DSN: "file:oversized?mode=memory&cache=shared", AutoMigrate: true,
 	})
 	if err != nil {
 		t.Fatalf("open store: %v", err)

@@ -1,6 +1,7 @@
 # Keep the build context to the source the image actually needs.
 .git
 .github
+.vscode
 bin/
 data/
 deploy/
@@ -17,3 +18,4 @@ Makefile
 Dockerfile
 .dockerignore
 docker-compose*.yml
+scripts/

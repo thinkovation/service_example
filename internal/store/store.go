@@ -1,6 +1,6 @@
-// Package store defines the persistence contract for customers. Concrete
-// implementations live in sub-packages; sqlstore covers both SQLite and
-// Postgres through database/sql.
+// Package store defines the persistence contract for customers. There is one
+// implementation per database, each in its own package with its own SQL:
+// store/sqlite and store/postgres.
 package store
 
 import (
@@ -23,6 +23,9 @@ var ErrConflict = errors.New("customer conflicts with an existing record")
 // Identifiers (UUID v7) and the Create_TS/Update_TS timestamps are owned by the
 // implementation, not the caller, so every record is stamped the same way
 // whichever transport created it.
+//
+// Both implementations are expected to behave identically from here; each has
+// its own test suite asserting that.
 type Store interface {
 	// Create inserts a new customer and returns it as stored.
 	Create(ctx context.Context, m customer.Mutation) (customer.Customer, error)

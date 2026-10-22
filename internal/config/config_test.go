@@ -18,8 +18,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTPAddr != ":8080" {
 		t.Errorf("HTTPAddr = %q, want \":8080\"", cfg.HTTPAddr)
 	}
-	if cfg.DSN() != cfg.SQLiteDSN {
-		t.Errorf("DSN() = %q, want the SQLite DSN %q", cfg.DSN(), cfg.SQLiteDSN)
+	if cfg.SQLiteDSN == "" {
+		t.Error("SQLiteDSN is empty, want a default development path")
 	}
 	if !cfg.AutoMigrate {
 		t.Error("AutoMigrate = false, want true by default")
@@ -46,8 +46,8 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.ServiceName != "customers" || cfg.HTTPAddr != "127.0.0.1:9090" {
 		t.Errorf("config = %+v, want the overridden identity and address", cfg)
 	}
-	if cfg.DSN() != "postgres://user:pass@db:5432/customers?sslmode=disable" {
-		t.Errorf("DSN() = %q, want the Postgres URL", cfg.DSN())
+	if cfg.PostgresDSN != "postgres://user:pass@db:5432/customers?sslmode=disable" {
+		t.Errorf("PostgresDSN = %q, want the configured URL", cfg.PostgresDSN)
 	}
 	if cfg.RequestTimeout != 3*time.Second {
 		t.Errorf("RequestTimeout = %s, want 3s", cfg.RequestTimeout)

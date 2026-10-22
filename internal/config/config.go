@@ -9,8 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+)
 
-	"github.com/thinkovation/service_example/internal/store/sqlstore"
+// The supported storage drivers, as STORE_DRIVER spells them.
+const (
+	DriverSQLite   = "sqlite"
+	DriverPostgres = "postgres"
 )
 
 // Config is the fully resolved service configuration.
@@ -43,14 +47,6 @@ type Config struct {
 	LogFormat string
 }
 
-// DSN returns the connection string for the selected driver.
-func (c Config) DSN() string {
-	if c.StoreDriver == sqlstore.DialectPostgres {
-		return c.PostgresDSN
-	}
-	return c.SQLiteDSN
-}
-
 // Load reads the configuration from the environment and validates it.
 func Load() (Config, error) {
 	cfg := Config{
@@ -61,7 +57,7 @@ func Load() (Config, error) {
 		LogLevel:  strings.ToLower(env("LOG_LEVEL", "info")),
 		LogFormat: strings.ToLower(env("LOG_FORMAT", "json")),
 
-		StoreDriver: strings.ToLower(env("STORE_DRIVER", sqlstore.DialectSQLite)),
+		StoreDriver: strings.ToLower(env("STORE_DRIVER", DriverSQLite)),
 		SQLiteDSN:   env("SQLITE_DSN", "file:./data/customers.db"),
 		PostgresDSN: env("DATABASE_URL", ""),
 	}
@@ -118,17 +114,17 @@ func (c Config) validate() error {
 	var errs []string
 
 	switch c.StoreDriver {
-	case sqlstore.DialectSQLite:
+	case DriverSQLite:
 		if strings.TrimSpace(c.SQLiteDSN) == "" {
 			errs = append(errs, "SQLITE_DSN must not be empty")
 		}
-	case sqlstore.DialectPostgres:
+	case DriverPostgres:
 		if strings.TrimSpace(c.PostgresDSN) == "" {
 			errs = append(errs, "DATABASE_URL must be set when STORE_DRIVER=postgres")
 		}
 	default:
 		errs = append(errs, fmt.Sprintf("STORE_DRIVER must be %q or %q, got %q",
-			sqlstore.DialectSQLite, sqlstore.DialectPostgres, c.StoreDriver))
+			DriverSQLite, DriverPostgres, c.StoreDriver))
 	}
 
 	if strings.TrimSpace(c.HTTPAddr) == "" {
