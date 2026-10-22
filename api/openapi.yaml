@@ -1,0 +1,630 @@
+openapi: 3.0.3
+
+info:
+  title: Customer service
+  version: "1.0.0"
+  description: |
+    A customer resource plus the two endpoints that describe the running
+    process: `/status` for identity and uptime, `/zhealth` for readiness.
+
+    A customer's `id` (UUID v7), `create_ts` and `update_ts` are assigned by
+    the service and cannot be set by a client. Unknown fields in a request
+    body are rejected rather than ignored, so a client typo fails loudly.
+
+    **Searching.** `/customers` also answers the HTTP `QUERY` method: a safe,
+    idempotent read whose filters travel in a JSON body, which is too rich for
+    a URL. OpenAPI 3.0 has no way to describe a method outside its fixed list,
+    so the identical `POST /customers/query` alias is documented instead. The
+    request body shown there is exactly what `QUERY /customers` takes:
+
+    ```
+    curl -X QUERY http://localhost:8080/customers \
+      -H 'Content-Type: application/json' \
+      -d '{"name_contains":"acme","status":["active"],"limit":25}'
+    ```
+
+servers:
+  - url: /
+    description: This service
+
+tags:
+  - name: customers
+    description: The customer resource
+  - name: system
+    description: Status and health of the running process
+  - name: docs
+    description: This documentation
+
+paths:
+  /status:
+    get:
+      tags: [system]
+      summary: Process identity, build and uptime
+      description: |
+        Touches no dependency, so it answers while the process is alive. Use it
+        as a liveness probe; `/zhealth` is the readiness one.
+      operationId: getStatus
+      responses:
+        "200":
+          description: The service is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+
+  /zhealth:
+    get:
+      tags: [system]
+      summary: Readiness, including dependencies
+      description: |
+        Checks everything the service needs in order to serve traffic. Answers
+        `200` when every check passes and `503` when one fails, never from a
+        cache.
+      operationId: getHealth
+      responses:
+        "200":
+          description: Every check passed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          description: At least one check failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /customers:
+    get:
+      tags: [customers]
+      summary: List or search customers
+      description: |
+        The same search as `QUERY /customers`, with the filters in the query
+        string. `id` and `status` may be repeated or comma-separated.
+      operationId: listCustomers
+      parameters:
+        - { $ref: "#/components/parameters/FilterID" }
+        - { $ref: "#/components/parameters/FilterName" }
+        - { $ref: "#/components/parameters/FilterNameContains" }
+        - { $ref: "#/components/parameters/FilterStatus" }
+        - { $ref: "#/components/parameters/FilterCreatedAfter" }
+        - { $ref: "#/components/parameters/FilterCreatedBefore" }
+        - { $ref: "#/components/parameters/FilterUpdatedAfter" }
+        - { $ref: "#/components/parameters/FilterUpdatedBefore" }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+        - { $ref: "#/components/parameters/Sort" }
+        - { $ref: "#/components/parameters/Order" }
+      responses:
+        "200":
+          description: One page of matches, with the total match count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Page"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+    post:
+      tags: [customers]
+      summary: Create a customer
+      description: The service assigns the id and both timestamps.
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerWrite"
+            examples:
+              minimal:
+                summary: Name only, status defaults to pending
+                value: { name: "Acme Ltd" }
+              full:
+                summary: Name and status
+                value: { name: "Acme Ltd", status: active }
+      responses:
+        "201":
+          description: Created
+          headers:
+            Location:
+              description: Path of the new customer
+              schema: { type: string, example: /customers/01a164a4-4169-727f-933f-6a43e711d485 }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /customers/query:
+    post:
+      tags: [customers]
+      summary: Search customers with a filter body
+      description: |
+        Identical to `QUERY /customers`, for clients, proxies or SDKs that
+        cannot send that method. An empty body matches everything.
+      operationId: queryCustomers
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerQuery"
+            examples:
+              byName:
+                summary: Name fragment, newest first
+                value: { name_contains: acme, sort: create_ts, order: desc, limit: 25 }
+              byStatusAndWindow:
+                summary: Two statuses created in a window
+                value:
+                  status: [active, pending]
+                  created_after: "2026-01-01T00:00:00Z"
+                  created_before: "2026-06-30T23:59:59Z"
+      responses:
+        "200":
+          description: One page of matches, with the total match count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Page"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /customers/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The customer's UUID
+        schema: { type: string, format: uuid }
+
+    get:
+      tags: [customers]
+      summary: Fetch one customer
+      operationId: getCustomer
+      responses:
+        "200":
+          description: The customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      tags: [customers]
+      summary: Replace a customer, or create it at this id
+      description: |
+        Replaces every client-settable field. When the id is unknown the
+        customer is created there and the response is `201` with a `Location`
+        header; an existing customer keeps its original `create_ts`.
+      operationId: replaceCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerWrite"
+            example: { name: "Acme Limited", status: active }
+      responses:
+        "200":
+          description: Replaced
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "201":
+          description: Created at the requested id
+          headers:
+            Location:
+              description: Path of the new customer
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+    patch:
+      tags: [customers]
+      summary: Update the fields the body sets
+      description: |
+        Fields the body omits, or sets to `null`, are left as they are. A body
+        that would change nothing is rejected rather than silently moving
+        `update_ts`.
+      operationId: patchCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerPatch"
+            example: { status: suspended }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /swagger/:
+    get:
+      tags: [docs]
+      summary: This page
+      description: Swagger UI, served from the binary with no external assets.
+      operationId: getSwaggerUI
+      responses:
+        "200":
+          description: The documentation page
+          content:
+            text/html:
+              schema: { type: string }
+
+  /swagger/openapi.yaml:
+    get:
+      tags: [docs]
+      summary: This document
+      operationId: getOpenAPISpec
+      responses:
+        "200":
+          description: The OpenAPI description of this service
+          content:
+            application/yaml:
+              schema: { type: string }
+
+components:
+  parameters:
+    FilterID:
+      name: id
+      in: query
+      description: Restrict to these ids; repeat the parameter or separate with commas
+      schema:
+        type: array
+        items: { type: string, format: uuid }
+      style: form
+      explode: true
+
+    FilterName:
+      name: name
+      in: query
+      description: Match the whole name, ignoring case
+      schema: { type: string }
+
+    FilterNameContains:
+      name: name_contains
+      in: query
+      description: |
+        Match any name containing this text, ignoring case. `%` and `_` are
+        matched literally. `q` is accepted as a shorthand.
+      schema: { type: string }
+
+    FilterStatus:
+      name: status
+      in: query
+      description: Restrict to these statuses; repeat the parameter or separate with commas
+      schema:
+        type: array
+        items: { $ref: "#/components/schemas/Status_" }
+      style: form
+      explode: true
+
+    FilterCreatedAfter:
+      name: created_after
+      in: query
+      description: Only customers created at or after this instant
+      schema: { type: string, format: date-time }
+
+    FilterCreatedBefore:
+      name: created_before
+      in: query
+      description: Only customers created at or before this instant
+      schema: { type: string, format: date-time }
+
+    FilterUpdatedAfter:
+      name: updated_after
+      in: query
+      description: Only customers updated at or after this instant
+      schema: { type: string, format: date-time }
+
+    FilterUpdatedBefore:
+      name: updated_before
+      in: query
+      description: Only customers updated at or before this instant
+      schema: { type: string, format: date-time }
+
+    Limit:
+      name: limit
+      in: query
+      description: Page size. Defaults to PAGE_SIZE_DEFAULT, capped at PAGE_SIZE_MAX.
+      schema: { type: integer, minimum: 1, example: 50 }
+
+    Offset:
+      name: offset
+      in: query
+      description: How many matches to skip
+      schema: { type: integer, minimum: 0, default: 0 }
+
+    Sort:
+      name: sort
+      in: query
+      description: Field to order by
+      schema:
+        type: string
+        enum: [create_ts, update_ts, name, status]
+        default: create_ts
+
+    Order:
+      name: order
+      in: query
+      description: Direction of the sort
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: asc
+
+  responses:
+    BadRequest:
+      description: |
+        The request was rejected: `validation_failed` (a field is missing,
+        malformed or out of range), `invalid_json` (the body is not a single
+        JSON object, or carries unknown fields) or `invalid_id` (the path
+        segment is not a UUID).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: validation_failed
+              message: one or more fields are invalid
+              details:
+                - { field: name, message: must not be empty }
+                - { field: status, message: "must be one of: pending, active, inactive, suspended" }
+              request_id: 6ef92116-276f-4e9b-9d76-014420bf51e2
+
+    NotFound:
+      description: No customer with that id
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: not_found, message: customer not found }
+
+    PayloadTooLarge:
+      description: The body is larger than HTTP_MAX_BODY_BYTES
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    UnsupportedMediaType:
+      description: Content-Type is not application/json
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    # Named Status_ because Status is the process status schema below.
+    Status_:
+      type: string
+      description: A customer's lifecycle state
+      enum: [pending, active, inactive, suspended]
+
+    Customer:
+      type: object
+      required: [id, name, status, create_ts, update_ts]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUID v7, assigned by the service and time-ordered
+          readOnly: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 256
+        status:
+          $ref: "#/components/schemas/Status_"
+        create_ts:
+          type: string
+          format: date-time
+          description: When the customer was created; never changes
+          readOnly: true
+        update_ts:
+          type: string
+          format: date-time
+          description: When the customer was last written
+          readOnly: true
+      example:
+        id: 01a164a4-4169-727f-933f-6a43e711d485
+        name: Acme Ltd
+        status: active
+        create_ts: "2026-10-22T17:24:08.681164146Z"
+        update_ts: "2026-10-22T17:24:08.681164146Z"
+
+    CustomerWrite:
+      type: object
+      description: The client-settable fields, for create and replace
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Leading and trailing space is trimmed
+        status:
+          allOf:
+            - $ref: "#/components/schemas/Status_"
+          description: Defaults to pending when omitted
+
+    CustomerPatch:
+      type: object
+      description: The fields to change; omit the rest
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 256
+        status:
+          $ref: "#/components/schemas/Status_"
+
+    CustomerQuery:
+      type: object
+      description: The filter body taken by QUERY /customers and POST /customers/query
+      additionalProperties: false
+      properties:
+        ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: Restrict to these ids
+        name:
+          type: string
+          description: Match the whole name, ignoring case
+        name_contains:
+          type: string
+          description: Match any name containing this text, ignoring case
+        status:
+          type: array
+          items: { $ref: "#/components/schemas/Status_" }
+        created_after: { type: string, format: date-time }
+        created_before: { type: string, format: date-time }
+        updated_after: { type: string, format: date-time }
+        updated_before: { type: string, format: date-time }
+        limit: { type: integer, minimum: 1 }
+        offset: { type: integer, minimum: 0 }
+        sort:
+          type: string
+          enum: [create_ts, update_ts, name, status]
+        order:
+          type: string
+          enum: [asc, desc]
+
+    Page:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Customer" }
+        total:
+          type: integer
+          description: How many customers match the filter, ignoring paging
+        limit: { type: integer }
+        offset: { type: integer }
+
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field: { type: string }
+        message: { type: string }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable and safe to branch on, unlike the message
+              enum:
+                - validation_failed
+                - invalid_json
+                - invalid_id
+                - not_found
+                - method_not_allowed
+                - unsupported_media_type
+                - payload_too_large
+                - conflict
+                - request_timeout
+                - internal_error
+            message:
+              type: string
+              description: For humans
+            details:
+              type: array
+              description: Every field that was rejected, not just the first
+              items: { $ref: "#/components/schemas/FieldError" }
+            request_id:
+              type: string
+              description: Matches the X-Request-Id response header
+
+    Status:
+      type: object
+      description: The body of GET /status
+      required: [service, env, status, build, started_at, uptime_seconds, now, store]
+      properties:
+        service: { type: string }
+        env: { type: string }
+        status: { type: string, example: ok }
+        build:
+          type: object
+          properties:
+            version: { type: string }
+            commit: { type: string }
+            build_date: { type: string }
+            go_version: { type: string }
+        started_at: { type: string, format: date-time }
+        uptime_seconds: { type: number }
+        now: { type: string, format: date-time }
+        store:
+          type: object
+          properties:
+            driver:
+              type: string
+              enum: [sqlite, postgres]
+
+    Health:
+      type: object
+      description: The body of GET /zhealth
+      required: [status, service, checked_at, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, fail]
+        service: { type: string }
+        checked_at: { type: string, format: date-time }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, status, latency_ms]
+            properties:
+              name: { type: string, example: database }
+              status: { type: string, enum: [ok, fail] }
+              detail: { type: string, description: "Which driver answered, e.g. postgres" }
+              error: { type: string, description: Present when the check failed }
+              latency_ms: { type: number }

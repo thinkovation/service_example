@@ -74,6 +74,8 @@ func run(base string) error {
 	check("bad body is 400", http.MethodPost, "/customers", http.StatusBadRequest, `{"name":""}`)
 	check("unknown route is 404", http.MethodGet, "/nope", http.StatusNotFound, "")
 	check("bad method is 405", http.MethodDelete, "/customers", http.StatusMethodNotAllowed, "")
+	check("docs page", http.MethodGet, "/swagger/", http.StatusOK, "")
+	check("openapi description", http.MethodGet, "/swagger/openapi.yaml", http.StatusOK, "")
 
 	if failures > 0 {
 		return fmt.Errorf("%d check(s) failed", failures)

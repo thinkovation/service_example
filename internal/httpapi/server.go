@@ -105,6 +105,10 @@ func (s *Server) routes() http.Handler {
 		http.MethodPatch: s.handlePatchCustomer,
 	})
 
+	// The documentation is a subtree: the page, the OpenAPI description and
+	// the two assets the page loads. net/http redirects /swagger here.
+	mux.Handle(DocsPath, methodRouter{http.MethodGet: s.handleDocs})
+
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, newAPIError(http.StatusNotFound, codeNotFound,
 			"no route matches "+r.Method+" "+r.URL.Path))

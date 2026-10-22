@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Customer service API</title>
+	<!-- An empty icon: without it the browser requests /favicon.ico on every
+	     page view and logs a 404 against the service. -->
+	<link rel="icon" href="data:,">
+	<!-- Served from this binary: the page works with no access to a CDN. -->
+	<link rel="stylesheet" href="swagger-ui.css">
+	<style>
+		body { margin: 0; background: #fafafa; }
+		/* The topbar belongs to the standalone preset, which we do not load. */
+		.swagger-ui .info { margin: 32px 0; }
+	</style>
+</head>
+<body>
+	<div id="swagger-ui"></div>
+	<script src="swagger-ui-bundle.js"></script>
+	<script>
+		window.ui = SwaggerUIBundle({
+			// Relative, so the page works behind any prefix or port.
+			url: "openapi.yaml",
+			dom_id: "#swagger-ui",
+			presets: [SwaggerUIBundle.presets.apis],
+			deepLinking: true,
+			docExpansion: "list",
+			defaultModelsExpandDepth: 1,
+			tryItOutEnabled: true,
+			displayRequestDuration: true
+		});
+	</script>
+</body>
+</html>

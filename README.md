@@ -140,6 +140,7 @@ traced back to a commit.
 | `GET`   | `/customers/{id}`   | Fetch one customer                                 |
 | `PUT`   | `/customers/{id}`   | Replace a customer (creates it if the id is new)   |
 | `PATCH` | `/customers/{id}`   | Update the fields the body sets                    |
+| `GET`   | `/swagger`          | Swagger UI, and the OpenAPI description it reads   |
 
 `HEAD` and `OPTIONS` are handled for every path; anything else gets a `405`
 with an `Allow` header.
@@ -294,6 +295,35 @@ Every response carries `X-Request-Id`. An inbound value is reused so a gateway's
 correlation id survives into the logs; otherwise one is generated. Error bodies
 repeat it.
 
+## API documentation
+
+`http://localhost:8080/swagger` is Swagger UI, with every endpoint listed and
+**Try it out** wired to the service you are looking at. The description it
+reads is at `/swagger/openapi.yaml`, and the same file is in the repository at
+[`api/openapi.yaml`](api/openapi.yaml) for anything that generates clients or
+checks contracts.
+
+The UI is served from the binary — `swagger-ui.css` and `swagger-ui-bundle.js`
+are vendored under `internal/httpapi/swaggerui` — so the page works on a
+machine with no internet access, and the service never serves third-party code
+from its own origin. That costs about 1.9 MB in the repository and in the
+binary. `internal/httpapi/swaggerui/README.md` says which release they came
+from and how to update them.
+
+The description is hand-written rather than generated from annotations, which
+means it can drift from the code. `TestSpecMatchesRoutes` is the guard: it
+fails if a route is missing from the description, if the description names a
+route that does not exist, or if it documents a path with a method the router
+does not accept.
+
+One endpoint cannot be described properly: OpenAPI 3.0 has no way to express a
+method outside its fixed list, so `QUERY /customers` appears in the
+description's prose and as its identical `POST /customers/query` alias, which
+is the operation **Try it out** will exercise.
+
+If you would rather not expose the docs publicly, they are four `GET` routes
+under `/swagger/` — block the prefix at your gateway.
+
 ## Windows and VS Code
 
 Nothing here needs make. The service is plain Go and the containers are plain
@@ -424,6 +454,7 @@ returns UTC RFC 3339 and never relies on sub-microsecond ordering.
 ## Project layout
 
 ```
+api/openapi.yaml         the OpenAPI description, embedded and served
 cmd/customersvc          process entry point: config, logging, lifecycle
 cmd/smoke                end-to-end check of a running instance, any mode
 internal/config          environment configuration and validation
@@ -432,6 +463,7 @@ internal/store           persistence interface and sentinel errors
 internal/store/sqlite    the SQLite driver
 internal/store/postgres  the Postgres driver
 internal/httpapi         routing, middleware, handlers, JSON shapes
+internal/httpapi/swaggerui  vendored Swagger UI assets
 internal/buildinfo       version stamps injected at link time
 deploy/                  compose files and per-mode environment
 scripts/run.ps1          the make targets, for Windows
