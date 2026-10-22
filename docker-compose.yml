@@ -1,0 +1,37 @@
+# Runs the service against Postgres. For the SQLite path just `make run`.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: customers
+      POSTGRES_PASSWORD: customers
+      POSTGRES_DB: customers
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U customers -d customers"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  customersvc:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    environment:
+      HTTP_ADDR: ":8080"
+      STORE_DRIVER: postgres
+      DATABASE_URL: postgres://customers:customers@postgres:5432/customers?sslmode=disable
+      LOG_FORMAT: json
+      SERVICE_ENV: docker
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
