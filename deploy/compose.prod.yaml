@@ -1,0 +1,27 @@
+# Production: the service container only. The database is somebody else's
+# concern here — a managed Postgres, an operator-run cluster, whatever the
+# environment provides — and is reached through DATABASE_URL in prod.env.
+#
+#   cp deploy/prod.env.example deploy/prod.env   # then fill in DATABASE_URL
+#   make prod-build                              # build the image
+#   make prod-up                                 # run it
+name: customersvc
+
+services:
+  customersvc:
+    # Built by `make prod-build`; set VERSION to deploy a specific tag.
+    image: ${IMAGE:-customersvc}:${VERSION:-latest}
+    restart: unless-stopped
+    env_file:
+      - prod.env
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 256M

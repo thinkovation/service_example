@@ -31,3 +31,9 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Service build output and the local SQLite database
+/bin/
+/data/
+.env
+/deploy/prod.env
